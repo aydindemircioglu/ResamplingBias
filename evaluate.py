@@ -12,13 +12,13 @@ import time
 from pprint import pprint
 import seaborn as sns
 from sklearn.calibration import calibration_curve
-from sklearn.metrics import brier_score_loss
+from sklearn.metrics import brier_score_loss, balanced_accuracy_score
 
 from scipy.stats import pearsonr, friedmanchisquare
 from scikit_posthocs import posthoc_nemenyi_friedman
 from joblib import parallel_backend, Parallel, delayed, load, dump
 
-
+from cross_validation import getAUCs
 from parameters import *
 from helpers import *
 from loadData import *
@@ -101,6 +101,78 @@ def getCalibrationTable (dfA, d):
     ctable = ctable.drop(["Brier"], axis = 1)
     tableB.append (ctable)
     return tableB
+
+
+
+def getSensTable (dfA, d):
+    dfA = dfA.copy()
+    for k in dfA.index:
+        row = dfA.loc[k]
+        all_gt = np.concatenate([row[f"Fold_{j}_GT"] for j in range(5)])
+        all_preds = np.concatenate([row[f"Fold_{j}_Preds"] for j in range(5)])
+
+        _, sens, _ = getAUCs (all_preds, all_gt)
+        dfA.at[k, "Sens"] = sens
+
+    Bmean = pd.DataFrame(dfA).groupby(["Resampling"])["Sens"].mean().round(3)
+    Bmean = Bmean.rename({s:getName(s) for s in Bmean.keys()})
+    # Emean = pd.DataFrame(dfA).groupby(["Resampling"])["ECE"].mean().round(3)
+    # Emean = Emean.rename({s:getName(s) for s in Emean.keys()})
+
+    tableB = []
+    ctable = pd.DataFrame(Bmean)
+    ctable[d] = [s[0] for s in list(zip(*[Bmean.values]))]
+    ctable = ctable.drop(["Sens"], axis = 1)
+    tableB.append (ctable)
+    return tableB
+
+
+
+
+def getSpecTable (dfA, d):
+    dfA = dfA.copy()
+    for k in dfA.index:
+        row = dfA.loc[k]
+        all_gt = np.concatenate([row[f"Fold_{j}_GT"] for j in range(5)])
+        all_preds = np.concatenate([row[f"Fold_{j}_Preds"] for j in range(5)])
+
+        _, _, spec = getAUCs (all_preds, all_gt)
+        dfA.at[k, "Spec"] = spec
+
+    Bmean = pd.DataFrame(dfA).groupby(["Resampling"])["Spec"].mean().round(3)
+    Bmean = Bmean.rename({s:getName(s) for s in Bmean.keys()})
+    # Emean = pd.DataFrame(dfA).groupby(["Resampling"])["ECE"].mean().round(3)
+    # Emean = Emean.rename({s:getName(s) for s in Emean.keys()})
+
+    tableB = []
+    ctable = pd.DataFrame(Bmean)
+    ctable[d] = [s[0] for s in list(zip(*[Bmean.values]))]
+    ctable = ctable.drop(["Spec"], axis = 1)
+    tableB.append (ctable)
+    return tableB
+
+
+
+def getBalancedAccuracyTable (dfA, d):
+    dfA = dfA.copy()
+    for k in dfA.index:
+        row = dfA.loc[k]
+        all_gt = np.concatenate([row[f"Fold_{j}_GT"] for j in range(5)])
+        all_preds = np.concatenate([row[f"Fold_{j}_Preds"] for j in range(5)])
+
+        bacc_score = balanced_accuracy_score(all_gt, all_preds >= 0.5)
+        dfA.at[k, "BAcc"] = bacc_score
+
+    Bmean = pd.DataFrame(dfA).groupby(["Resampling"])["BAcc"].mean().round(3)
+    Bmean = Bmean.rename({s:getName(s) for s in Bmean.keys()})
+
+    tableB = []
+    ctable = pd.DataFrame(Bmean)
+    ctable[d] = [s[0] for s in list(zip(*[Bmean.values]))]
+    ctable = ctable.drop(["BAcc"], axis = 1)
+    tableB.append (ctable)
+    return tableB
+
 
 
 def getAUCTable (dfA, d):
@@ -278,10 +350,19 @@ def computeTable (d):
     tableBrier = pd.DataFrame(tableBrier[0])
     # table2 = pd.DataFrame(tableSD[0])
 
+    tableBAcc = getBalancedAccuracyTable(dfA, d)
+    tableBAcc = pd.DataFrame(tableBAcc[0])
+
+    tableSens = getSensTable(dfA, d)
+    tableSens = pd.DataFrame(tableSens[0])
+
+    tableSpec = getSpecTable(dfA, d)
+    tableSpec = pd.DataFrame(tableSpec[0])
+
     tableM, tableSD = getAUCTable(dfA, d)
     table1 = pd.DataFrame(tableM[0])
     table2 = pd.DataFrame(tableSD[0])
-    return tableM, table1, tableSD, table2, tableBrier
+    return tableM, table1, tableSD, table2, tableBrier, tableBAcc, tableSens, tableSpec
 
 #
 
@@ -403,21 +484,127 @@ def getAUCPlots (dfA):
     print ("AUC -- Median", median, "IQR", p25, "-", p75)
 
 
+
+
+def getBAccPlots (dfB):
+    df_before = dfB.loc[dfB.index.str.endswith('_Before')]
+    df_during = dfB.loc[dfB.index.str.endswith('_During')]
+
+    fMat = (df_during).round(3)
+    pMat = pd.DataFrame(fMat)
+    pMat.index = [k.replace("_During", '') for k in df.index if "During" in str(k)]
+    drawArray(pMat, cmap = [("o", 0.5, 0.75, 1.0)], fsize = (11,7),  aspect = 0.7, fontsize = 15, fName = f"SuppTable_3", paper = True)
+
+    df_before = df_before.drop(["No resampling_Before"], axis = 0).copy()
+    df_during = df_during.drop(["No resampling_During"], axis = 0).copy()
+
+    df_diff = pd.DataFrame(df_before.values - df_during.values, columns=df_before.columns, index=df_before.index)
+    df_diff.index = df_diff.index.str.replace('_Before', '')
+    fMat = df_diff.copy()
+    fMat = (fMat).round(3)
+    pMat = pd.DataFrame(fMat)
+    drawArray(pMat, cmap = [("o", 0, 0.05, 0.5)], fsize = (11,7),  aspect = 0.7, fontsize = 15, fName = f"FigureS2", paper = True)
+
+    table1 = pd.read_excel("./paper/Table_1.xlsx")
+    tableZ = pMat.T.reset_index(drop = False)
+    result_df = pd.merge(tableZ, table1, left_on="index", right_on='Dataset')
+    generateBiasPlots (pMat,  result_df, ylim_low = 0.0, ylim_high = 0.4, ppos = 0.95, figsize = (18,26), fname = "FigureS2_B")
+
+    median = np.median(pMat.values)
+    p25 = np.percentile(pMat, 25)
+    p75 = np.percentile(pMat, 75)
+    print ("BAcc -- Median", median, "IQR", p25, "-", p75)
+
+
+
+def getSensPlots (dfB):
+    df_before = dfB.loc[dfB.index.str.endswith('_Before')]
+    df_during = dfB.loc[dfB.index.str.endswith('_During')]
+
+    fMat = (df_during).round(3)
+    pMat = pd.DataFrame(fMat)
+    pMat.index = [k.replace("_During", '') for k in df.index if "During" in str(k)]
+    drawArray(pMat, cmap = [("o", 0.5, 0.75, 1.0)], fsize = (11,7),  aspect = 0.7, fontsize = 15, fName = f"SuppTable_4", paper = True)
+
+    df_before = df_before.drop(["No resampling_Before"], axis = 0).copy()
+    df_during = df_during.drop(["No resampling_During"], axis = 0).copy()
+
+    df_diff = pd.DataFrame(df_before.values - df_during.values, columns=df_before.columns, index=df_before.index)
+    df_diff.index = df_diff.index.str.replace('_Before', '')
+    fMat = df_diff.copy()
+    fMat = (fMat).round(3)
+    pMat = pd.DataFrame(fMat)
+    drawArray(pMat, cmap = [("o", 0, 0.05, 0.5)], fsize = (11,7),  aspect = 0.7, fontsize = 15, fName = f"FigureS3", paper = True)
+
+    table1 = pd.read_excel("./paper/Table_1.xlsx")
+    tableZ = pMat.T.reset_index(drop = False)
+    result_df = pd.merge(tableZ, table1, left_on="index", right_on='Dataset')
+    generateBiasPlots (pMat,  result_df, ylim_low = 0.0, ylim_high = 0.4, ppos = 0.95, figsize = (18,26), fname = "FigureS3_B")
+
+    median = np.median(pMat.values)
+    p25 = np.percentile(pMat, 25)
+    p75 = np.percentile(pMat, 75)
+    print ("Sens -- Median", median, "IQR", p25, "-", p75)
+
+
+
+def getSpecPlots (dfB):
+    df_before = dfB.loc[dfB.index.str.endswith('_Before')]
+    df_during = dfB.loc[dfB.index.str.endswith('_During')]
+
+    fMat = (df_during).round(3)
+    pMat = pd.DataFrame(fMat)
+    pMat.index = [k.replace("_During", '') for k in df.index if "During" in str(k)]
+    drawArray(pMat, cmap = [("o", 0.5, 0.75, 1.0)], fsize = (11,7),  aspect = 0.7, fontsize = 15, fName = f"SuppTable_5", paper = True)
+
+    df_before = df_before.drop(["No resampling_Before"], axis = 0).copy()
+    df_during = df_during.drop(["No resampling_During"], axis = 0).copy()
+
+    df_diff = pd.DataFrame(df_before.values - df_during.values, columns=df_before.columns, index=df_before.index)
+    df_diff.index = df_diff.index.str.replace('_Before', '')
+    fMat = df_diff.copy()
+    fMat = (fMat).round(3)
+    pMat = pd.DataFrame(fMat)
+    drawArray(pMat, cmap = [("o", 0, 0.05, 0.5)], fsize = (11,7),  aspect = 0.7, fontsize = 15, fName = f"FigureS4", paper = True)
+
+    table1 = pd.read_excel("./paper/Table_1.xlsx")
+    tableZ = pMat.T.reset_index(drop = False)
+    result_df = pd.merge(tableZ, table1, left_on="index", right_on='Dataset')
+    generateBiasPlots (pMat,  result_df, ylim_low = 0.0, ylim_high = 0.4, ppos = 0.95, figsize = (18,26), fname = "FigureS4_B")
+
+    median = np.median(pMat.values)
+    p25 = np.percentile(pMat, 25)
+    p75 = np.percentile(pMat, 75)
+    print ("Spec -- Median", median, "IQR", p25, "-", p75)
+
+
 if __name__ == '__main__':
     # gather data
     with parallel_backend("loky", inner_max_num_threads=1):
         cres = Parallel (n_jobs = ncpus)(delayed(computeTable)(d) for d in dList)
 
     table1 = []
+    tableBAcc = []
     tableB = []
+    tableSens = []
+    tableSpec = []
     for j, _ in enumerate(dList):
-        tM, t1, tSD, t2, tB = cres[j]
+        tM, t1, tSD, t2, tB, tBAcc, tSe, tSp = cres[j]
         table1.append(t1)
         tableB.append(tB)
+        tableBAcc.append(tBAcc)
+        tableSens.append(tSe)
+        tableSpec.append(tSp)
     df = pd.concat(table1, axis = 1)
     dfB = pd.concat(tableB, axis = 1)
+    dfBAcc = pd.concat(tableBAcc, axis = 1)
+    dfSe = pd.concat(tableSens, axis = 1)
+    dfSp = pd.concat(tableSpec, axis = 1)
 
-    pMat = getAUCPlots (df)
-    bMat = getBrierPlots (dfB)
+    _ = getAUCPlots (df)
+    _ = getBrierPlots (dfB)
+    _ = getBAccPlots (dfBAcc)
+    _ = getSensPlots (dfSe)
+    _ = getSpecPlots (dfSp)
 
 #
